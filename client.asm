@@ -37,6 +37,7 @@ take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
   two_symbol_buffer db 0,0
   quit db 'Q',0
   newgame db 1
+  canstart db 0
   MAX dq 12
   MIN dq 2
   f  db "/dev/urandom",0
@@ -50,6 +51,7 @@ section '.bss' writable
   buffer2 rb 101
   temp rb 100
   server rq 1
+  shared_memory rq 1
 
   
 
@@ -91,28 +93,22 @@ _start:
    mov [random_desc], rax ;генерируем случайное число
 
 
-  ;  mov rax, 0 ;
-  ;   mov rdi, [random_desc]
-  ;   mov rsi, number
-  ;   mov rdx, 1
-  ;   syscall
   
-    ; mov rax, [number]
-    ; xor rdx, rdx
-    ; mov rcx, 100
-    ; div rcx
-    ; inc rdx
-    ; add [addrstr_client+2], rdx
-    ; xor rdx,rdx
-    ; mov rax, [addrstr_client+2]
-    ; mov rsi, buffer1
-    ; call number_str
-    ; call print_str
-    ; call exit
 
+    ;;Первый процесс создает разделяемую память
+    mov rdi, 0    ;начальный адрес выберет сама ОС
+    mov rsi, 1024   ;задаем размер области памяти
+    mov rdx, 0x3  ;совмещаем флаги PROT_READ | PROT_WRITE
+    mov r10, 0x21  ;задаем режим MAP_ANONYMOUS|MAP_SHARED
+    mov r8, -1   ;указываем файловый дескриптор null
+    mov r9, 0     ;задаем нулевое смещение
+    mov rax, 9    ;номер системного вызова mmap
+    syscall
 
-  ;  call take_card
-  ;   call exit
+    
+    
+    ;;Сохраняем адрес памяти
+    mov [shared_memory], rax
     
    
   ;   call exit
@@ -186,8 +182,8 @@ _start:
      cmp rax,0
      je _write
 
-      mov rsi, msg_enter
-     call print_str
+    ;   mov rsi, msg_enter
+    ;  call print_str
 
     .main_loop:
     mov rdi, [ids]
@@ -230,6 +226,12 @@ _connect_error:
    call exit
 
 _read:
+    ; push rdi
+    ; mov rdi, 500000
+    ; ; add rdi, [RANDOM]
+    ; call mydelay
+    ; pop rdi
+    ; pop rdi
     ; mov rsi, reading_msg ;powerful debug
     ; call print_str
 
@@ -377,7 +379,45 @@ _read:
       loop .lab2
     jmp _read
 
-      .co3:
+.co3:
+cmp BYTE [buffer1+1], '@'
+    jne .co4
+    ; mov rsi, msg_enter
+    ;   call print_str  
+   
+
+    cmp [buffer1+2], 'S'
+    jne .co4   ;покачто
+
+;  cmp [buffer1+3], 'S'
+;     jne .co4   ;покачто
+
+
+    ; push rdi
+    ; mov rdi, 100000
+    ; ; add rdi, [RANDOM]
+    ; call mydelay
+    ; pop rdi
+
+
+   
+    mov QWORD [buffer1], 0
+          mov rcx, 100
+      mov rax, 0
+
+      .lab3:
+        mov [buffer1+rcx], 0
+      loop .lab3
+
+      mov rsi, [shared_memory]
+      mov BYTE [rsi], 1
+           mov rsi, msg_enter
+     call print_str  
+
+      
+    jmp _read
+
+      .co4:
       ; mov rdi, buffer1
 
 
@@ -436,10 +476,33 @@ _write:
     mov rsi, buffer2
     mov rdx, 100
     syscall
+    push rdi
+    .waiting:
+    ;; ожидаем остальных..
     
-   push rdi
-    mov rdi, 20
+    mov rdi, 3
+    
+    
+    mov rdi, [shared_memory]
+    cmp BYTE [rdi+0], 1
+    
+    jne .waiting
+    lock dec BYTE [rdi+0]
+    pop rdi
+
+
+
+  ;  push rdi
+  ;   mov rdi, 100000
+  ;   ; add rdi, [RANDOM]
+  ;   call mydelay
+  ;   pop rdi
+
+  push rdi
+    push rcx
+    mov rdi, 3000000
     call mydelay
+    pop rcx
     pop rdi
 
     call take_card
@@ -450,8 +513,10 @@ _write:
     syscall
 
     push rdi
-    mov rdi, 20
+    push rcx
+    mov rdi, 1000000000
     call mydelay
+    pop rcx
     pop rdi
 
     call take_card
@@ -464,6 +529,8 @@ _write:
     dec [newgame]
 
     .continue:
+
+
     
     mov rsi, buffer2
     call input_keyboard
@@ -566,6 +633,11 @@ place_bet:
     mov word [buffer2+1], ax
     xor rax, rax
     mov BYTE [buffer2+3], 0
+
+    push rdi
+    mov rdi, 50000
+    call mydelay
+    pop rdi
     ret
 
 quit_game:
