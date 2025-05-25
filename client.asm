@@ -27,6 +27,10 @@ take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
   win_win db 'Игрок %d выиграл со счетом %d!.', 0xA, 0
   new_msg db '[Игрок%d]: %s', 0xA, 0
 
+  new_game_bet db 'Перед началом игры введите сумму ставки. Ваш баланс - %d$', 0xA,0
+  bet_accepted db 'Ваша ставка на сумму %d$ была принята. Обновленный баланс - %d$.', 0xA, 0
+  balance dq 1000
+  bet dq 0,0,0,0
   start_of_msg db 'Sent message:',0
    stack_alignment db 0
   end_of_msg db ':', 0
@@ -39,7 +43,7 @@ take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
   sm1 dw 0, -1, 4096 
   sm2 dw 0,  1, 4096   
   ids dq 0
-  balance dq 0
+  current_score dq 0
 section '.bss' writable
 	random_desc rq 1
   buffer1 rb 101
@@ -412,19 +416,43 @@ jmp _read
 _write:
     cmp [newgame], 1
     jne .continue
+
+    mov rdi, new_game_bet
+    mov QWORD rsi, [balance]
+    call safe_printf
+    mov rsi, bet
+    call input_keyboard
+    call str_number
+    mov [bet], rax
+    mov rdi, bet_accepted
+    mov rsi, [bet]
+    sub [balance], rsi
+    mov rdx, [balance]
+    call safe_printf
+
+    call place_bet
+    mov rax, 1
+    mov rdi, [server]
+    mov rsi, buffer2
+    mov rdx, 100
+    syscall
     
+   push rdi
+    mov rdi, 20
+    call mydelay
+    pop rdi
+
     call take_card
     mov rax, 1
     mov rdi, [server]
     mov rsi, buffer2
     mov rdx, 100
     syscall
+
     push rdi
     mov rdi, 20
     call mydelay
     pop rdi
-    ; lock inc [temp]
-    ; lock dec [temp]
 
     call take_card
     mov rax, 1
@@ -475,28 +503,6 @@ _write:
     mov rdx, 100
     syscall
 
-                    ; mov rsi, start_of_msg
-                    ; call print_str
-                    ; mov al, [buffer2]
-                    ; mov [two_symbol_buffer], al
-                    ; mov rsi, two_symbol_buffer
-                    ; call print_str
-                    
-                    ; xor rax, rax
-                    ; mov al, [buffer2+1]
-                    ; call number_str
-                    ; call print_str
-                    ; mov rsi, end_of_msg
-                    ; call print_str
-                    ; call new_line
-
-    
-    ; je _start.end
-
-      ; mov rcx, 100
-      ; .lab:
-      ;   mov [buffer2+rcx], 0
-      ; loop .lab 
 jmp _write
 
 
@@ -517,16 +523,16 @@ take_card:
     mov [RANDOM], rax
     mov rdi, take_msg
     mov rsi, [RANDOM]
-    add [balance], rax
-    cmp [balance], 22
+    add [current_score], rax
+    cmp [current_score], 22
     jl .nnnext     
     mov rsi, msg_lost
     call print_str
-    mov [balance], 0
+    mov [current_score], 0
     jmp wh_l     ;;
 
     .nnnext:      ;; cюда если меньше 22 - сразу
-    mov rdx, [balance]
+    mov rdx, [current_score]
     push rax
     call safe_printf
     pop rax
@@ -543,14 +549,23 @@ take_card:
 stop_take:
     
     mov rdi, stop_msg
-    mov rsi, [balance]
+    mov rsi, [current_score]
     push rax
     call safe_printf
     pop rax
     mov BYTE [buffer2], '#'
     mov BYTE [buffer2+1], 'e'
     mov BYTE [buffer2+2], 0
-    mov [balance], 0
+    mov [current_score], 0
+    ret
+
+place_bet:
+
+    mov BYTE [buffer2], '$'
+    mov rax, [bet]
+    mov word [buffer2+1], ax
+    xor rax, rax
+    mov BYTE [buffer2+3], 0
     ret
 
 quit_game:
@@ -560,8 +575,10 @@ quit_game:
     pop rax
     mov BYTE [buffer2], '|'
     mov BYTE [buffer2+1], 0
-    mov [balance], 0
+    mov [current_score], 0
     ret
+
+
 
 
 
