@@ -34,7 +34,6 @@ section '.data' writeable
   from_msg db '[usr%d]: ', 0xA, 0
   other_takes_msg db '<Игрок %d взял карту %d, его счет %d>', 0xA, 0
   other_stop_msg db '<Игрок %d остановился на счете %d>', 0xA, 0
-  other_bets_msg db '<Игрок %d поставил %d$>', 0xA, 0
   other_lost_msg db '<Игрок %d проиграл со счетом %d>', 0xA, 0
   other_connected db '<Присоединился новый игрок - usr%d>', 0xA, 0
   left_players_msg db '<Осталось %d игроков>', 0xA, 0
@@ -49,7 +48,7 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
   user_left_msg db 'Игрок %d покинул игру, осталось %d игроков.', 0xA,0
   cards_scores_players_current dq 0 ; +0-63 scores (up to 64 players) , +64 - total players
   new_status db 0
-  bets dq 0  ; +0-63 bets, +64 - current_ended
+  enders dq 0  ; +0-63 enders, +64 - current_ended
   inp_msg db '_in_', 0xA, 0
   message_to_all dq  0 ;+0-64 - msg
   dealer_score db 0, 0
@@ -60,7 +59,7 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
   
   DBG_start_sem_loop db 'Пользователь написал, начинаю увеличивать семафор', 0xA,0
   DBG_end_sem_loop db 'Завершено!', 0xA,0
-  DBG_amount_msg db 'Всего: %d, в игре: %d, не завершило ход: %d, не поставило: %d.', 0xA, 0
+  DBG_amount_msg db 'Всего: %d, в игре: %d, не завершило ход: %d.', 0xA, 0
   DBG_start_copy db 'Пользователь написал, начинаю копировать сообщение', 0xA,0
   DBG_end_copy db 'Завершено', 0xA,0
   DBG_reduce_sem db 'Отправлено сообщение, уменьшаю семафор', 0xA,0
@@ -117,8 +116,8 @@ _start:
     
     ;;Сохраняем адрес памяти
     mov [cards_scores_players_current], rax
-    mov [bets], rax
-    add [bets], 64
+    mov [enders], rax
+    add [enders], 64
     mov [message_to_all], rax
     add [message_to_all], 64
     add [message_to_all], 64
@@ -170,7 +169,6 @@ _start:
     jl  _bind_error
 
     mov rsi, [cards_scores_players_current]
-    mov BYTE [rsi+984], 0
     mov BYTE [rsi+992], 0
     mov BYTE [rsi+1000], 0
     mov BYTE [rsi+1008], 0
@@ -200,7 +198,7 @@ _start:
         ; mov rdi, 5
         ; 
         ; pop rdi
-      lock inc BYTE [rsi+984]     ; НЕ ПОСТАВИВШИЕ
+
       lock inc BYTE [rsi+1000]    ; ВСЕ СУЩЕСТВОВАВШИЕ ИГРОКИ
       lock inc BYTE [rsi+1008]    ; АКТУАЛЬНОЕ ЧИСЛО ИГРОКОВ
       lock inc BYTE [rsi+1016]    ; ЧИСЛО НЕ ЗАВЕРШИВШИХ ХОД
@@ -264,66 +262,6 @@ _read:
       cmp rax, 0
       je _read    
 
-      cmp BYTE [read_buffer], '$'
-      jne .nobet
-
-        mov rsi, [bets]
-        xor rdx, rdx
-        mov dl, [read_buffer+1]
-        mov dh, [read_buffer+2]
-        
-        mov WORD [rsi+r12*2], dx
-        mov rdi, other_bets_msg   ;строка для вводаx
-        mov rsi, r12
-    
-        call safe_printf  
-        mov rsi, [cards_scores_players_current]
-        lock dec BYTE [rsi+984]
-
-        call debug_amounts
-
-        mov rsi, [cards_scores_players_current]
-        ; cmp BYTE [rsi+984],0 
-        ; jne .nostart
-        
-
-      ;   mov rsi, [cards_scores_players_current]
-      ; mov rcx, [rsi+1008]
-
-      ; mov rsi, DBG_start_sem_loop_game
-      ; call print_str
-      ; .semloopX:
-
-      ;     mov rsi, [cards_scores_players_current]
-      ;     lock inc BYTE [rsi+992]
-      ; loop .semloopX
-
-      ; mov rsi, DBG_end_sem_loop
-      ; call print_str
-
-      mov rsi, [message_to_all]
-      add rsi, 1
-      mov BYTE [rsi], 1
-      mov BYTE [rsi+1], '@'
-      mov BYTE [rsi+2], 'S'
-      mov rax, r12
-      mov BYTE [rsi+3], 0
-      mov BYTE [rsi+4], 0
-
-
-        mov rax, 1
-        mov rdi, r12
-        mov rsi, [message_to_all]
-        add rsi, 1
-        mov rdx, 64
-        syscall
-
-        .nostart:
-
-        jmp _read
-        
-      .nobet:
-      
       mov rsi, [cards_scores_players_current]
       mov rcx, [rsi+1008]
 
@@ -352,7 +290,7 @@ _read:
     
       ; mov rsi, [cards_scores_players_current]
       ; mov rbx, read_buffer
-
+      
       ;; ПРОВЕРКА НА ВЗЯТИЕ КАРТЫ
       cmp BYTE [read_buffer], '!'
       jne .nocard
@@ -794,18 +732,15 @@ debug_amounts:
   push rcx
   push rbx
   push rdi
-  push r8
  
   mov rbx, [cards_scores_players_current]
   mov rsi, [rbx+1000]
   mov rdx, [rbx+1008]
   mov rcx, [rbx+1016]
-  mov r8, [rbx+984]
   mov rdi, DBG_amount_msg
 
   call safe_printf
 
-  pop r8
   pop rdi
   pop rbx
   pop rcx
