@@ -55,7 +55,8 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
   dealer_score db 0, 0
   stack_alignment db 0
   temp db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-
+  sent_at_req db 'Sent @ req for %d.' ,0xA,0
+  some_write db '_w:', 0xA,0
 
   DBG_start_sem_loop db 'Пользователь написал, начинаю увеличивать семафор', 0xA,0
   DBG_end_sem_loop db 'Завершено!', 0xA,0
@@ -64,6 +65,8 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
   DBG_end_copy db 'Завершено', 0xA,0
   DBG_reduce_sem db 'Отправлено сообщение, уменьшаю семафор', 0xA,0
   DBG_message_cleared  db 'Буфер отправления очищен', 0xA,0
+  sent_win_request db 'Отправлен  ^ пользователю %d о победе %d ', 0xA,0
+  DBG_rcx db 'Значение rcx очищено: %d', 0xA,0
   
 
 
@@ -393,7 +396,7 @@ _read:
         mov rsi, [cards_scores_players_current]
         lock dec BYTE [rsi+1016]    ; ЧИСЛО НЕ ЗАВЕРШИВШИХ ХОД
         
-        mov rdi, 10000
+        mov rdi, 20000
         call mydelay
         call debug_amounts
 
@@ -402,7 +405,19 @@ _read:
         mov al, 0
         cmp BYTE [rsi+1016], al
         jne .notend
+
+             mov rsi, [cards_scores_players_current]
+      mov rcx, [rsi+1008]
+      mov rsi, DBG_start_sem_loop
+      call print_str
+      .semloop66:
+          mov rsi, [cards_scores_players_current]
+          lock inc BYTE [rsi+992]
+      loop .semloop66
+      mov rsi, DBG_end_sem_loop
+
         call game_over
+        jmp _read
         .notend:
 
 
@@ -481,6 +496,11 @@ _write:
     cmp BYTE [rsi], 0
     je _write
 
+    push rsi
+    mov rsi, some_write
+    call print_str
+    pop rsi
+
     mov rax, r12
     mov rbx, 10000
     xor rdx, rdx
@@ -520,8 +540,11 @@ _write:
   mov rbx, r12
   mov al, bl
   mov rsi, [message_to_all]
-  cmp BYTE [rsi], al
+    cmp BYTE [rsi], al
   je _write
+  .notcopy:
+
+
 
 
     mov rax, 1
@@ -530,7 +553,6 @@ _write:
     mov rdx, 64
     syscall
 jmp _write
-
     .empty:
     mov rsi, [message_to_all]
     mov rcx, 64
@@ -546,7 +568,19 @@ jmp _write
 
 
 game_over:
-  mov BYTE [dealer_score], 18
+call new_line
+call new_line
+call debug_atomized
+
+   push rcx
+          push rdi
+      mov rdi, 1000000
+      
+      call mydelay
+      pop rdi
+      pop rcx
+
+  mov BYTE [dealer_score], 16
   mov BYTE [dealer_score+1], 0 ;WINNERS AMOUNT
 
   
@@ -557,6 +591,8 @@ game_over:
   mov rsi, [cards_scores_players_current]
   mov rcx, 63
   .game_over_loop:
+  push rcx
+  mov rsi, [cards_scores_players_current]
     mov BYTE al, [rsi+rcx]
     cmp al, 21
     jg .zero
@@ -570,6 +606,7 @@ game_over:
     je .zero  ;; после добавить ничью
 
     mov rdi, [message_to_all]
+    add rdi, 1
     
     mov BYTE [rdi+1], '^'
     mov rax, rcx
@@ -579,51 +616,101 @@ game_over:
     mov BYTE [rdi+3], 0
     lock inc BYTE [dealer_score+1]
 
-     push rsi
-     push rcx
-        cmp [dealer_score+1], 1
-        je .nnnn
-        mov rsi, DBG_start_sem_loop
-      call print_str
-      .semloop:
+    mov r10, 6
+    .allloop:
 
-          mov rsi, [cards_scores_players_current]
-          lock inc BYTE [rsi+992]
-      loop .semloop
+;  cmp BYTE r10l, cl
+;   jne .notcopy
+;    mov rsi, [message_to_all]
+;     add rsi, 1
+;     mov BYTE [rsi], 'S'
 
-      mov rsi, DBG_end_sem_loop
-      call print_str
-      .nnnn:
+  ; .notcopy:
+
+
+
+
+    mov rax, 1
+    mov rdi, r10
+    mov rsi, [message_to_all]
+    add rsi, 1
+    mov rdx, 64
+    push rcx
+    syscall
     pop rcx
-    pop rsi
-      ; push rcx
-      ; mov rdi, 10000
-      ; call mydelay
-      ; pop rcx
+
+    mov rsi, [cards_scores_players_current]
+    mov BYTE al, [rsi+rcx]
+    
+    mov rdi, [message_to_all]
+    add rdi, 1
+    
+    mov BYTE [rdi+1], '^'
+    mov rax, rcx
+    mov BYTE [rdi], al
+    mov rax, [rsi+rcx]
+    mov BYTE [rdi+2], al
+    mov BYTE [rdi+3], 0
+
+      push rcx
+    push r10
+    push rax
+    mov rdi, 1000000
+    call mydelay
+       pop rax
+    pop r10
+    pop rcx
+
+
+
    
+    push rcx
+    push r10
+    push rax
+     mov rdi, sent_win_request
+    mov rsi, r10
+    mov rdx, rcx
+
+    call safe_printf
+    pop rax
+    pop r10
+    pop rcx
+
+    dec r10
+    cmp r10, 3
+    jne .allloop
+
+    ; push rcx
+    ;   mov rdi, 100
+    ;   call mydelay
+    ;   pop rcx
   mov rdi, win_msg
   
   xor rdx, rdx
   mov rsi, [cards_scores_players_current]
   mov dl, BYTE [rsi+rcx]
   mov rsi, rcx
+
+
   push rcx
   call safe_printf
-  
-    push rdi
-    mov rdi, 15000
-    call mydelay
-    pop rdi
+  mov rsi, win_msg
+  call print_str
   pop rcx
 
     
     .zero:
     mov rsi, [cards_scores_players_current]
-    mov BYTE [rsi+rcx], 0    
+    pop rcx
+    mov BYTE [rsi+rcx], 0   
+    mov rdi, DBG_rcx
+    mov rsi, rcx
+    push rcx
+    call safe_printf 
+    pop rcx
     dec rcx
     cmp rcx, -1
     jne .game_over_loop
-
 
 
   mov rsi, [cards_scores_players_current]
@@ -653,6 +740,74 @@ game_over:
         mov rdi, 5
         call mydelay
         pop rdi
+
+
+
+
+
+mov rsi, results_msg
+  call print_str 
+
+
+  mov rsi, [message_to_all]
+    
+    mov BYTE [rsi], 99
+    mov BYTE [rsi+1], '@'
+    mov BYTE [rsi+2], 0
+
+   mov rsi, [cards_scores_players_current]
+      mov rcx, [rsi+1008]
+      mov rsi, DBG_start_sem_loop
+      call print_str
+      .semloop_free:
+          mov rsi, [cards_scores_players_current]
+          lock inc BYTE [rsi+992]
+      loop .semloop_free
+      mov rsi, DBG_end_sem_loop
+      call print_str
+    ; mov r10, 10
+    ; .allloop2:
+    ; push r10
+
+    ;   mov rsi, [message_to_all]
+    ; add rsi, 1
+    ; mov rax, r10
+    ; mov BYTE [rsi], 99
+    ; mov BYTE [rsi+1], '@'
+    ; mov BYTE [rsi+2], 0
+
+    ; mov rax, 1
+    ; mov rdi, r10
+    ; mov rsi, [message_to_all]
+    ; add rsi, 1
+    ; mov rdx, 64
+    ; push rcx;
+    ; syscall
+    ; pop rcx
+
+    ; mov rdi, sent_at_req
+    ; mov rsi, r10
+
+    ; push rcx
+    ; push r10
+    ; call safe_printf
+    ; pop r10
+    ; pop rcx
+
+    ; mov rdi, 500000
+    ; call mydelay
+    ; pop r10
+    ; dec r10
+    ; cmp r10, 3
+    ; jne .allloop2
+
+
+    mov rsi, [cards_scores_players_current]
+    mov BYTE al, [rsi+1008]
+    mov BYTE [rsi+984], al
+
+    call debug_amounts
+   
   ret
   
 

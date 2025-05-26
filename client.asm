@@ -6,12 +6,14 @@ include 'func.asm'
 
 section '.data' writeable
 take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
+  we_got_input db 'Мы получили ввод' , 0xA, 0
   gain_confirmed db '! confirmed', 0xA, 0
   stop_confirmed db '# confirmed', 0xA, 0
   win_confirmed db '^ confirmed', 0xA, 0
   msg_1 db 'Error bind', 0xa, 0
   msg_2 db 'Successfull bind', 0xa, 0
   msg_3 db 'Successful connect', 0xa, 0
+  DBG_amount_msg db 'Новая игра: %d, баланс: %d, ставка: %d.', 0xA,0 
   msg_4 db 'Error connect', 0xa, 0
   msg_enter db 'Вы присоединились к игре. Отправьте T, чтобы взять карту, или S, чтобы остановиться.', 0xa, 0
   number dq 0
@@ -25,18 +27,25 @@ take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
   stop_msg db 'Вы остановились на счете %d', 0xA,0
   RANDOM dq 0
   win_win db 'Игрок %d выиграл со счетом %d!.', 0xA, 0
+  youwin db 'Вы (игрок %d) выиграли со счетом %d!.', 0xA, 0
   new_msg db '[Игрок%d]: %s', 0xA, 0
-
+results2_msg db 0xA,  '______________ Начало игры ______________', 0xA,0
   new_game_bet db 'Перед началом игры введите сумму ставки. Ваш баланс - %d$', 0xA,0
   bet_accepted db 'Ваша ставка на сумму %d$ была принята. Обновленный баланс - %d$.', 0xA, 0
   balance dq 1000
+  drop_input db 'Напишите любое сообщение для начала новой игры.', 0xA, 0
+  win_increase db 'Вы выиграли %d$. Ваш баланс до %d$. После: %d$.', 0xA, 0
+    
   bet dq 0,0,0,0
   start_of_msg db 'Sent message:',0
    stack_alignment db 0
+  ;  incorrect_input db 'Неверный вход:', 0xA,0
+   incorrect_input_bytes db 'Неверный вход: %d %d %d :', 0xA,0
   end_of_msg db ':', 0
   two_symbol_buffer db 0,0
   quit db 'Q',0
   newgame db 1
+  buf_clear db 'Буфер чтения очищен', 0xA,0
   MAX dq 12
   MIN dq 2
   f  db "/dev/urandom",0
@@ -44,6 +53,7 @@ take_msg db 'Ваша карта: %d, сумма %d', 0xA,0
   sm2 dw 0,  1, 4096   
   ids dq 0
   current_score dq 0
+  shared_memory dq 0
 section '.bss' writable
 	random_desc rq 1
   buffer1 rb 101
@@ -90,6 +100,31 @@ _start:
    syscall 
    mov [random_desc], rax ;генерируем случайное число
 
+      ;;Первый процесс создает разделяемую память
+    mov rdi, 0    ;начальный адрес выберет сама ОС
+    mov rsi, 1024   ;задаем размер области памяти
+    mov rdx, 0x3  ;совмещаем флаги PROT_READ | PROT_WRITE
+    mov r10, 0x21  ;задаем режим MAP_ANONYMOUS|MAP_SHARED
+    mov r8, -1   ;указываем файловый дескриптор null
+    mov r9, 0     ;задаем нулевое смещение
+    mov rax, 9    ;номер системного вызова mmap
+    syscall
+
+    
+    
+    ;;Сохраняем адрес памяти
+    mov [shared_memory], rax
+    mov rsi, [shared_memory]
+    mov BYTE [rsi], 1
+
+    mov QWORD [rsi+8], 1000
+
+    push rax
+    push rsi
+    mov rsi, results2_msg
+    call print_str
+    pop rsi
+    pop rax
 
   ;  mov rax, 0 ;
   ;   mov rdi, [random_desc]
@@ -253,10 +288,22 @@ _read:
       ; call number_str
       ; call print_str
       cmp rax, 0
-      je _read    
+      je _read  
+      mov rsi, we_got_input
+      call print_str  
 
       cmp BYTE [buffer1+0], 0
       jne .okay
+      ; mov rsi, incorrect_input
+      ; call print_str
+      xor rsi, rsi
+      xor rdx, rdx
+      xor rcx, rcx
+      mov rdi, incorrect_input_bytes
+      mov BYTE sil, [buffer1+1]
+      mov BYTE dl, [buffer1+2]
+      mov BYTE cl, [buffer1+3]
+      call safe_printf
       ;;;INCORRECT INPUT
       jmp _read
 
@@ -284,7 +331,14 @@ _read:
     xor rax, rax          
     call safe_printf          
   
-    mov QWORD [buffer1], 0
+      mov rcx, 100
+      mov rax, 0
+      .lab4:
+        mov [buffer1+rcx], 0
+      loop .lab4
+
+      call debug_amounts
+
     jmp _read
 
     .co1:
@@ -322,7 +376,7 @@ _read:
     pop rsi
     pop rdi
     pop rax
-    mov QWORD [buffer1], 0
+    ; mov QWORD [buffer1], 0
 
 
       mov rcx, 100
@@ -330,6 +384,8 @@ _read:
       .lab1:
         mov [buffer1+rcx], 0
       loop .lab1
+
+      call debug_amounts
 
     jmp _read
 
@@ -355,9 +411,32 @@ _read:
     mov BYTE al, [buffer1+2]   ;dl
     mov rdx, rax
     ; mov BYTE al, [buffer1+3] ; al
-    ; mov rcx, rax
-    xor rax, rax          
-    call safe_printf          
+    mov rax, 'S'
+    cmp BYTE al, [buffer1]
+    jne .notequal
+    mov rdi, youwin
+
+    push rcx
+      mov rdi, 10
+      call mydelay
+      pop rcx
+    push rsi
+    
+    mov rdi, win_increase ; 
+    mov rbx, [shared_memory]
+    mov rsi, [rbx+16]
+    add rsi, [rbx+16]
+    
+    mov rdx, [rbx+8]
+
+    add [rbx+8], rsi 
+    mov rcx, [rbx+8]
+    call safe_printf
+    pop rsi
+    .notequal:
+    
+    call safe_printf  
+    ; call print_str  
     pop r11
     pop r10
     pop r9
@@ -368,16 +447,47 @@ _read:
     pop rdi
     pop rax
 
-    mov QWORD [buffer1], 0
+    ; mov QWORD [buffer1], 0
           mov rcx, 100
       mov rax, 0
 
       .lab2:
         mov [buffer1+rcx], 0
       loop .lab2
+
+      call debug_amounts
     jmp _read
 
       .co3:
+  
+    cmp BYTE [buffer1+1], '@'
+    jne .co4
+    ; ;                       ; mov rsi, win_confirmed
+    ; ;                       ; call print_str
+    push rax
+    push rsi
+    mov rsi, results2_msg
+    call print_str
+    mov rsi, drop_input
+    call print_str
+    mov rsi, [shared_memory]
+    mov BYTE [rsi], 1
+    pop rsi
+    pop rax
+
+
+    mov QWORD [buffer1], 0
+      mov rcx, 100
+
+      .lab3:
+        mov [buffer1+rcx], 0
+      loop .lab3
+
+      call debug_amounts
+    jmp _read
+
+    .co4:
+
       ; mov rdi, buffer1
 
 
@@ -392,18 +502,6 @@ _read:
       
 
       call safe_printf
-
-
-
-      ; mov rsi, buffer1
-      ; inc rsi
-      ; push rcx
-      ; call print_str
-      ; pop rcx
-      ; call new_line
-
-
-
     .clear:
     ;   ;;Очищаем буффер, чтобы он не хранил старые значения
       mov rcx, 100
@@ -411,23 +509,36 @@ _read:
       .lab:
         mov [buffer1+rcx], 0
       loop .lab 
+      mov rsi, buf_clear
+      call print_str
+
 jmp _read
 
 _write:
-    cmp [newgame], 1
-    jne .continue
 
+    mov rsi, [shared_memory]
+    cmp BYTE [rsi], 1
+    jne .continue
+    
     mov rdi, new_game_bet
-    mov QWORD rsi, [balance]
+     mov rsi, [shared_memory]
+    mov QWORD rsi, [rsi+8]
     call safe_printf
     mov rsi, bet
     call input_keyboard
     call str_number
-    mov [bet], rax
+    push rsi
+    
+     mov rsi, [shared_memory]
+    mov [rsi+16], rax
+    pop rsi
     mov rdi, bet_accepted
-    mov rsi, [bet]
-    sub [balance], rsi
-    mov rdx, [balance]
+    mov rsi, [shared_memory]
+    mov rsi, [rsi+16]
+    mov rdx, [shared_memory]
+    sub [rdx+8], rsi
+    mov rdx, [shared_memory]
+    mov rdx, [rdx+8]
     call safe_printf
 
     call place_bet
@@ -461,12 +572,17 @@ _write:
     mov rdx, 100
     syscall
 
-    dec [newgame]
+    mov rsi, [shared_memory]
+    dec BYTE [rsi]
 
     .continue:
     
     mov rsi, buffer2
     call input_keyboard
+
+    mov rsi, [shared_memory]
+    cmp BYTE [rsi], 1
+    je _write
 
     
     cmp byte [buffer2], 'Q'
@@ -560,17 +676,18 @@ take_card:
     jle .end_take
 
 
-    mov rax, 1
-    mov rdi, [server]
-    mov rsi, buffer2
-    mov rdx, 100
-    syscall
+    ; mov rax, 1
+    ; mov rdi, [server]
+    ; mov rsi, buffer2
+    ; mov rdx, 100
+    ; syscall
 
     
-    mov rdi, 300000
-    call mydelay
-    call stop_take
-
+    ; mov rdi, 500000
+    ; call mydelay
+    ; mov BYTE [buffer2], 'S'
+    ; mov BYTE [buffer2+1], 0
+    ; jmp _write.next1
     
     .end_take:
     ret
@@ -602,7 +719,10 @@ stop_take:
 place_bet:
 
     mov BYTE [buffer2], '$'
-    mov rax, [bet]
+    push rsi
+    mov rsi, [shared_memory]
+    mov rax, [rsi+16]
+    pop rsi
     mov word [buffer2+1], ax
     xor rax, rax
     mov BYTE [buffer2+3], 0
@@ -673,3 +793,32 @@ safe_printf:
 .done:
     ret
 
+
+
+debug_amounts:
+  push rax
+  push rsi
+  push rdx
+  push rcx
+  push rbx
+  push rdi
+  push r8
+ 
+  mov rbx, [shared_memory]
+  mov rsi, [rbx]
+  mov rdx, [rbx+8]
+  mov rcx, [rbx+16]
+  ; mov r8, [rbx+984]
+  mov rdi, DBG_amount_msg
+
+  call safe_printf
+
+  pop r8
+  pop rdi
+  pop rbx
+  pop rcx
+  pop rdx
+  pop rsi
+  pop rax
+  
+  ret
