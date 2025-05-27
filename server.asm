@@ -40,6 +40,13 @@ section '.data' writeable
   left_players_msg db '<Осталось %d игроков>', 0xA, 0
   endgame_msg db 'Игра окончена. Подсчет результатов...', 0xA,0
 
+  write_executed db 'Write executed: %d %d %d %d to %d :', 0xA, 0
+
+  MAX dq 24
+  number dq 0
+  MIN dq 18
+  RANDOM dq 0
+
   automated_response db 'ping client', 0xA, 0
   results_msg db 0xA, '____________ Результаты игры ____________', 0xA,0
 results2_msg db 0xA,  '______________ Начало игры ______________', 0xA,0
@@ -71,6 +78,7 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
 
 
   ids dq 0
+  f  db "/dev/urandom",0
   val dq 0
     sm1 dw 0, -1, 4096 
    sm2 dw 0, 1, 4096   
@@ -79,6 +87,7 @@ results2_msg db 0xA,  '______________ Начало игры ______________', 0xA
   
   
 section '.bss' writable
+random_desc rq 1
 	
   buffer rb 100
   buffer_help rb 200
@@ -88,7 +97,6 @@ section '.bss' writable
 
   
 
-  random_desc rq 1
 ;;Структура для клиента
   struc sockaddr_in
 {
@@ -103,6 +111,11 @@ section '.bss' writable
 section '.text' executable
 	
 _start:
+  mov rdi, f     
+   mov rax, 2 
+   mov rsi, 0o
+   syscall 
+   mov [random_desc], rax ;генерируем случайное число
 
 
     ;;Первый процесс создает разделяемую память
@@ -133,6 +146,8 @@ _start:
         dec rcx
         cmp rcx, -1
         jne .initial_clear
+
+
 
 
         
@@ -392,11 +407,24 @@ _read:
         mov rdi, other_stop_msg
         call safe_printf
 
+
+           mov rsi, [cards_scores_players_current]
+      mov rcx, [rsi+1008]
+      mov rsi, DBG_start_sem_loop
+      call print_str
+      .semloop2:
+          mov rsi, [cards_scores_players_current]
+          lock inc BYTE [rsi+992]
+      loop .semloop2
+      mov rsi, DBG_end_sem_loop
+      call print_str
+      call debug_atomized
+
         ;;работает до этого момента!
         mov rsi, [cards_scores_players_current]
         lock dec BYTE [rsi+1016]    ; ЧИСЛО НЕ ЗАВЕРШИВШИХ ХОД
         
-        mov rdi, 20000
+        mov rdi, 90000
         call mydelay
         call debug_amounts
 
@@ -421,17 +449,7 @@ _read:
         .notend:
 
 
-           mov rsi, [cards_scores_players_current]
-      mov rcx, [rsi+1008]
-      mov rsi, DBG_start_sem_loop
-      call print_str
-      .semloop2:
-          mov rsi, [cards_scores_players_current]
-          lock inc BYTE [rsi+992]
-      loop .semloop2
-      mov rsi, DBG_end_sem_loop
-      call print_str
-      call debug_atomized
+        
         jmp _read
 
       .nostop:
@@ -496,13 +514,9 @@ _write:
     cmp BYTE [rsi], 0
     je _write
 
-    push rsi
-    mov rsi, some_write
-    call print_str
-    pop rsi
 
     mov rax, r12
-    mov rbx, 10000
+    mov rbx, 1000
     xor rdx, rdx
     mul rbx
     mov rdi, rax
@@ -512,6 +526,39 @@ _write:
     mov al, 1
     lock cmpxchg BYTE [rsi+992], al
     je .empty
+
+
+    push rsi
+    push rdi
+    push rbx
+    push rdx
+    push r8
+    push rcx
+    push r9
+
+    xor rdx, rdx
+    xor rbx, rbx
+    xor r8,r8
+    xor rcx, rcx
+    xor rsi, rsi
+    mov rsi, [message_to_all]
+
+    mov rdi, write_executed
+    mov BYTE dl, [rsi+1]
+    mov BYTE cl, [rsi+2]
+    mov BYTE r8l, [rsi+3]
+    mov r9l, r12l
+    mov BYTE bl, [rsi]
+    mov rsi, rbx
+    call safe_printf
+
+    pop r9
+    pop rcx
+    pop r8
+    pop rdx
+    pop rbx
+    pop rdi
+    pop rsi
 
 
     mov rsi, DBG_reduce_sem
@@ -580,7 +627,22 @@ call debug_atomized
       pop rdi
       pop rcx
 
-  mov BYTE [dealer_score], 16
+ mov rax, 0 ;
+    mov rdi, [random_desc]
+    mov rsi, number
+    mov rdx, 1
+    syscall
+    mov rax, [MAX]
+    sub rax, [MIN]
+    mov rcx, rax ;rcx=5
+    mov rax, [number] ;rax = rand
+    xor rdx, rdx
+    div rcx
+    mov rax, rdx
+    add rax, [MIN]
+    mov [RANDOM], rax
+
+  mov BYTE [dealer_score], al
   mov BYTE [dealer_score+1], 0 ;WINNERS AMOUNT
 
   
@@ -605,20 +667,7 @@ call debug_atomized
     cmp BYTE al,[dealer_score]
     je .zero  ;; после добавить ничью
 
-    mov rdi, [message_to_all]
-    add rdi, 1
     
-    mov BYTE [rdi+1], '^'
-    mov rax, rcx
-    mov BYTE [rdi], al
-    mov rax, [rsi+rcx]
-    mov BYTE [rdi+2], al
-    mov BYTE [rdi+3], 0
-    lock inc BYTE [dealer_score+1]
-
-    mov r10, 6
-    .allloop:
-
 ;  cmp BYTE r10l, cl
 ;   jne .notcopy
 ;    mov rsi, [message_to_all]
@@ -630,20 +679,20 @@ call debug_atomized
 
 
 
-    mov rax, 1
-    mov rdi, r10
-    mov rsi, [message_to_all]
-    add rsi, 1
-    mov rdx, 64
-    push rcx
-    syscall
-    pop rcx
+    ; mov rax, 1
+    ; mov rdi, r10
+    ; mov rsi, [message_to_all]
+    ; add rsi, 1
+    ; mov rdx, 64
+    ; push rcx
+    ; syscall
+    ; pop rcx
 
     mov rsi, [cards_scores_players_current]
     mov BYTE al, [rsi+rcx]
     
     mov rdi, [message_to_all]
-    add rdi, 1
+    ; add rdi, 1
     
     mov BYTE [rdi+1], '^'
     mov rax, rcx
@@ -651,11 +700,26 @@ call debug_atomized
     mov rax, [rsi+rcx]
     mov BYTE [rdi+2], al
     mov BYTE [rdi+3], 0
+    push rcx
+      mov rsi, [cards_scores_players_current]
+      mov rcx, [rsi+1008]
+      mov rsi, DBG_start_sem_loop
+      call print_str
+      .semloop_win:
+          mov rsi, [cards_scores_players_current]
+          lock inc BYTE [rsi+992]
+      loop .semloop_win
+      mov rsi, DBG_end_sem_loop
+      call print_str
+
+      pop rcx
+
+      call debug_atomized
 
       push rcx
     push r10
     push rax
-    mov rdi, 1000000
+    mov rdi, 100000
     call mydelay
        pop rax
     pop r10
@@ -667,18 +731,13 @@ call debug_atomized
     push rcx
     push r10
     push rax
-     mov rdi, sent_win_request
+    mov rdi, sent_win_request
     mov rsi, r10
     mov rdx, rcx
-
     call safe_printf
     pop rax
     pop r10
     pop rcx
-
-    dec r10
-    cmp r10, 3
-    jne .allloop
 
     ; push rcx
     ;   mov rdi, 100
@@ -692,11 +751,11 @@ call debug_atomized
   mov rsi, rcx
 
 
-  push rcx
-  call safe_printf
-  mov rsi, win_msg
-  call print_str
-  pop rcx
+      push rcx
+      call safe_printf
+      mov rsi, win_msg
+      call print_str
+      pop rcx
 
     
     .zero:
@@ -753,7 +812,9 @@ mov rsi, results_msg
     
     mov BYTE [rsi], 99
     mov BYTE [rsi+1], '@'
-    mov BYTE [rsi+2], 0
+    mov BYTE cl,  [dealer_score]
+    mov BYTE [rsi+2], cl
+     mov BYTE [rsi+3], 0
 
    mov rsi, [cards_scores_players_current]
       mov rcx, [rsi+1008]
@@ -765,6 +826,7 @@ mov rsi, results_msg
       loop .semloop_free
       mov rsi, DBG_end_sem_loop
       call print_str
+      call debug_atomized
     ; mov r10, 10
     ; .allloop2:
     ; push r10
@@ -794,17 +856,33 @@ mov rsi, results_msg
     ; pop r10
     ; pop rcx
 
-    ; mov rdi, 500000
-    ; call mydelay
+    mov rdi, 500000
+    call mydelay
     ; pop r10
     ; dec r10
     ; cmp r10, 3
     ; jne .allloop2
 
+    ; ОБНУЛЕНИЕ
+
 
     mov rsi, [cards_scores_players_current]
     mov BYTE al, [rsi+1008]
     mov BYTE [rsi+984], al
+
+
+
+      mov rcx, 900
+    mov rsi, [cards_scores_players_current]
+    .ulcrear:
+        mov BYTE [rsi+rcx], 0
+        dec rcx
+        cmp rcx, -1
+        jne .ulcrear
+
+
+    
+    
 
     call debug_amounts
    
